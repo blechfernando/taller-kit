@@ -14,7 +14,7 @@ Esta PC controladora tiene instalado el comando global `taller` (en `%USERPROFIL
 Todas las PCs conectadas con `1-CONECTAR.bat`, `web/conectar.ps1` o `linux-conectar.sh` quedan configuradas de forma **fija y completa** (sobreviven reinicios, cortes de luz y traslados entre casa/taller/local/deposito):
 - OpenSSH (`TallerSSH` puerto `22`) en `C:\ProgramData\Taller` (o `/etc/taller` en Linux)
 - TightVNC Server en `127.0.0.1:5900` (solo accesible por tunel SSH)
-- Tailscale instalado en Win10/11 x64 para acceso por Internet (`tag:remoto`)
+- Tailscale instalado en Windows (Win10/11 x64/x86 con `1.104.7` y Win7/8 x64/x86 con `1.44.3`) y Linux para acceso por Internet (`tag:remoto`)
 
 ## Flujo rapido
 

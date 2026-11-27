@@ -436,66 +436,91 @@ if (Test-Path $cleanSrc) {
     Copy-Item -Path $cleanSrc -Destination (Join-Path $TargetDir "taller-clean.ps1") -Force -ErrorAction SilentlyContinue
 }
 
-# --- 3. Tailscale (Internet fijo con tag:remoto) ---
+function Find-TailscaleExe {
+    $roots = @(
+        [Environment]::GetEnvironmentVariable("ProgramFiles"),
+        [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    )
+    foreach ($r in $roots) {
+        if (-not $r) { continue }
+        foreach ($sub in @("Tailscale\tailscale.exe", "Tailscale IPN\tailscale.exe")) {
+            $cand = Join-Path $r $sub
+            if (Test-Path $cand) { return $cand }
+        }
+    }
+    return ""
+}
+
+# --- 3. Tailscale (Internet fijo con tag:remoto; Win7/8 usa 1.44.3 y Win10/11 usa 1.104.7) ---
 $tailscaleIp     = ""
 $tailscaleStatus = "No instalado"
 if (-not $NoTailscale) {
-    if ($isWin7Legacy -or -not $is64) {
-        $tailscaleStatus = "No compatible con Win7/32-bit (solo LAN en esta PC)"
-        Write-Warn "Tailscale moderno requiere Windows 10/11 64-bit. En Windows 7 queda listo SSH + VNC por LAN."
-    } else {
-        $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
-        if (-not (Test-Path $tsExe)) {
-            $tsMsi = Join-Path $BinDir "tailscale-amd64.msi"
-            if (Test-Path $tsMsi) {
-                Write-Info "Instalando Tailscale silenciosamente..."
-                $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$tsMsi`" /qn /norestart" -Wait -PassThru
-                if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
-                    Write-Utf8NoBom -Path (Join-Path $TargetDir "installed_tailscale.flag") -Content "1"
-                    $wait = 0
-                    while ($wait -lt 40) {
-                        $tsSvc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-                        if ($tsSvc -and $tsSvc.Status -eq "Running" -and (Test-Path $tsExe)) { break }
-                        if ($tsSvc -and $tsSvc.Status -ne "Running") { Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue }
-                        Start-Sleep -Milliseconds 500
-                        $wait++
-                    }
-                    $tailscaleStatus = "Instalado (listo para activar)"
+    $tsExe = Find-TailscaleExe
+    if (-not $tsExe) {
+        $tsMsiName = if ($isWin7Legacy) { "tailscale-win7-$arch.msi" } elseif ($is64) { "tailscale-amd64.msi" } else { "tailscale-x86.msi" }
+        $tsMsi     = Join-Path $BinDir $tsMsiName
+        if (Test-Path $tsMsi) {
+            Write-Info "Instalando Tailscale ($tsMsiName) silenciosamente..."
+            $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$tsMsi`" /qn /norestart TS_NOLAUNCH=1" -Wait -PassThru
+            if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                Write-Utf8NoBom -Path (Join-Path $TargetDir "installed_tailscale.flag") -Content "1"
+                $wait = 0
+                while ($wait -lt 40) {
+                    $tsExe = Find-TailscaleExe
+                    $tsSvc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+                    if ($tsSvc -and $tsSvc.Status -eq "Running" -and $tsExe) { break }
+                    if ($tsSvc -and $tsSvc.Status -ne "Running") { Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue }
+                    Start-Sleep -Milliseconds 500
+                    $wait++
+                }
+                $tailscaleStatus = "Instalado (listo para activar)"
+            } else {
+                if ($isWin7Legacy) {
+                    Write-Warn "Tailscale MSI devolvio codigo $($proc.ExitCode). En Win7 requiere SP1 + parche SHA-2 (KB4474419)."
+                    $tailscaleStatus = "Error Win7 ($($proc.ExitCode)) - revisar SP1/KB4474419"
                 } else {
                     Write-Warn "Tailscale MSI devolvio codigo $($proc.ExitCode)."
                     $tailscaleStatus = "Error instalando ($($proc.ExitCode))"
                 }
-            } else {
-                Write-Warn "No se encontro $tsMsi; se omite Tailscale."
             }
         } else {
-            $tailscaleStatus = "Ya instalado"
+            Write-Warn "No se encontro $tsMsi; se omite Tailscale."
         }
+    } else {
+        $tailscaleStatus = "Ya instalado"
+    }
 
-        if (Test-Path $tsExe) {
-            try { $tailscaleIp = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim() } catch {}
-            if ($tailscaleIp -match '^\d+\.\d+\.\d+\.\d+$') {
-                $tailscaleStatus = "Conectado ($tailscaleIp)"
-            } elseif ($TailscaleKey) {
-                Write-Info "Conectando Tailscale a tu red en modo desatendido..."
-                $tsArgs = @("up", "--authkey=$TailscaleKey", "--advertise-tags=$TailscaleTags", "--unattended")
-                if ($TailscaleName) { $tsArgs += "--hostname=$TailscaleName" }
-                & $tsExe @tsArgs
-                if ($LASTEXITCODE -eq 0) {
-                    Start-Sleep -Seconds 2
-                    try { $tailscaleIp = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim() } catch {}
-                    if ($tailscaleIp) {
-                        $tailscaleStatus = "Conectado ($tailscaleIp)"
-                        Write-Ok "Tailscale conectado! IP Tailscale: $tailscaleIp"
-                    }
-                } else {
-                    Write-Warn "tailscale up devolvio codigo $LASTEXITCODE. Revisa la Auth Key."
-                    $tailscaleStatus = "Error de Auth Key ($LASTEXITCODE)"
+    if ($tsExe -and (Test-Path $tsExe)) {
+        try { $tailscaleIp = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim() } catch {}
+        if ($tailscaleIp -match '^\d+\.\d+\.\d+\.\d+$') {
+            $tailscaleStatus = "Conectado ($tailscaleIp)"
+        } elseif ($TailscaleKey) {
+            Write-Info "Conectando Tailscale a tu red en modo desatendido..."
+            $tsArgs = @("up", "--authkey=$TailscaleKey", "--advertise-tags=$TailscaleTags", "--unattended")
+            if ($TailscaleName) { $tsArgs += "--hostname=$TailscaleName" }
+            $prevEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            $tsOut = & $tsExe @tsArgs 2>&1
+            $tsCode = $LASTEXITCODE
+            $ErrorActionPreference = $prevEap
+            foreach ($ol in @($tsOut)) {
+                $s = [string]$ol
+                if ($s) { Write-Log "[TAILSCALE] $s" }
+            }
+            if ($tsCode -eq 0) {
+                Start-Sleep -Seconds 2
+                try { $tailscaleIp = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim() } catch {}
+                if ($tailscaleIp) {
+                    $tailscaleStatus = "Conectado ($tailscaleIp)"
+                    Write-Ok "Tailscale conectado! IP Tailscale: $tailscaleIp"
                 }
             } else {
-                $tailscaleStatus = "Instalado (pendiente de activar desde controlador con 'taller tailscale')"
-                Write-Info "Tailscale quedo instalado. Podes activarlo remoto con: taller tailscale $env:COMPUTERNAME"
+                Write-Warn "tailscale up devolvio codigo $tsCode. Revisa la Auth Key o el ACL de tag:remoto."
+                $tailscaleStatus = "Error de Auth Key ($tsCode)"
             }
+        } else {
+            $tailscaleStatus = "Instalado (pendiente de activar desde controlador con 'taller tailscale')"
+            Write-Info "Tailscale quedo instalado. Podes activarlo remoto con: taller tailscale $env:COMPUTERNAME"
         }
     }
 }
@@ -524,7 +549,7 @@ Write-Host "    taller add-host $aliasHint $firstLan $currentUser $Port   (o IP 
 Write-Host "    taller ssh $tailscaleIp"
 } else {
 Write-Host "    taller ssh $env:COMPUTERNAME"
-if ((-not $isWin7Legacy) -and $is64 -and (-not $NoTailscale)) {
+if (-not $NoTailscale) {
 Write-Host "    taller tailscale $env:COMPUTERNAME $aliasHint   (activa Internet remoto)"
 }
 }

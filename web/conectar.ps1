@@ -109,10 +109,21 @@ function Invoke-TallerSetup {
         Get-FileWithFallback -Urls @("$BaseUrl/bin/$vncMsiName", $vncUrlUp) -DestPath (Join-Path $binDir $vncMsiName)
     }
 
-    if ((-not $SkipTailscale) -and (-not $isWin7) -and $is64) {
-        if (-not (Test-Path (Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"))) {
-            $tsNameFile = "tailscale-amd64.msi"
-            $tsUrlUp    = "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-amd64.msi"
+    if (-not $SkipTailscale) {
+        $hasTs = $false
+        foreach ($r in @([Environment]::GetEnvironmentVariable("ProgramFiles"), [Environment]::GetEnvironmentVariable("ProgramFiles(x86)"))) {
+            if ($r -and ((Test-Path (Join-Path $r "Tailscale\tailscale.exe")) -or (Test-Path (Join-Path $r "Tailscale IPN\tailscale.exe")))) {
+                $hasTs = $true; break
+            }
+        }
+        if (-not $hasTs) {
+            if ($isWin7) {
+                $tsNameFile = "tailscale-win7-$arch.msi"
+                $tsUrlUp    = if ($is64) { "https://pkgs.tailscale.com/stable/tailscale-setup-1.44.3-amd64.msi" } else { "https://pkgs.tailscale.com/stable/tailscale-setup-1.44.3-x86.msi" }
+            } else {
+                $tsNameFile = if ($is64) { "tailscale-amd64.msi" } else { "tailscale-x86.msi" }
+                $tsUrlUp    = if ($is64) { "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-amd64.msi" } else { "https://pkgs.tailscale.com/stable/tailscale-setup-1.104.7-x86.msi" }
+            }
             Get-FileWithFallback -Urls @("$BaseUrl/bin/$tsNameFile", $tsUrlUp) -DestPath (Join-Path $binDir $tsNameFile)
         }
     }

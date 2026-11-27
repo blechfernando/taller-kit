@@ -61,6 +61,21 @@ function Remove-KeysFromFile {
     }
 }
 
+function Find-TailscaleExe {
+    $roots = @(
+        [Environment]::GetEnvironmentVariable("ProgramFiles"),
+        [Environment]::GetEnvironmentVariable("ProgramFiles(x86)")
+    )
+    foreach ($r in $roots) {
+        if (-not $r) { continue }
+        foreach ($sub in @("Tailscale\tailscale.exe", "Tailscale IPN\tailscale.exe")) {
+            $cand = Join-Path $r $sub
+            if (Test-Path $cand) { return $cand }
+        }
+    }
+    return ""
+}
+
 function Remove-TallerDir {
     param([string]$DirPath)
     if (-not (Test-Path $DirPath)) { return }
@@ -68,8 +83,8 @@ function Remove-TallerDir {
     # 1. Tailscale (si fue instalado por Taller Kit)
     if (Test-Path (Join-Path $DirPath "installed_tailscale.flag")) {
         Write-Host "[TALLER] Desconectando y desinstalando Tailscale..." -ForegroundColor Cyan
-        $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
-        if (Test-Path $tsExe) {
+        $tsExe = Find-TailscaleExe
+        if ($tsExe) {
             & $tsExe logout | Out-Null
             Start-Sleep -Seconds 1
         }

@@ -705,8 +705,16 @@ switch ($cmd) {
             $hFlag = if ($tsAlias) { "--hostname=$tsAlias" } else { "" }
             $psTs = @"
 `$ErrorActionPreference = 'Stop'
-`$tsExe = Join-Path `$env:ProgramFiles 'Tailscale\tailscale.exe'
-if (-not (Test-Path `$tsExe)) { throw 'Tailscale no esta instalado en esta PC.' }
+`$tsExe = ''
+foreach (`$r in @([Environment]::GetEnvironmentVariable('ProgramFiles'), [Environment]::GetEnvironmentVariable('ProgramFiles(x86)'))) {
+    if (-not `$r) { continue }
+    foreach (`$sub in @('Tailscale\tailscale.exe', 'Tailscale IPN\tailscale.exe')) {
+        `$c = Join-Path `$r `$sub
+        if (Test-Path `$c) { `$tsExe = `$c; break }
+    }
+    if (`$tsExe) { break }
+}
+if (-not `$tsExe) { throw 'Tailscale no esta instalado en esta PC.' }
 `$argsList = @('up', '--authkey=$tsKey', '--advertise-tags=tag:remoto', '--unattended')
 if ('$hFlag') { `$argsList += '$hFlag' }
 & `$tsExe @argsList

@@ -62,7 +62,9 @@ Usamos **Tailscale** con la etiqueta `tag:remoto` y una regla ACL **en una sola 
 
 ### Opcion A: Con el pendrive
 1. Enchufa el pendrive y doble clic en `TALLER_KIT\1-CONECTAR.bat`.
-2. Si pusiste `tailscale-auth.txt` en el pendrive, no te pregunta nada: instala **OpenSSH (puerto 22) + TightVNC localhost + Tailscale (`tag:remoto`)** y al final muestra la IP LAN y la IP Tailscale.
+2. Si pusiste `tailscale-auth.txt` en el pendrive, corre minimizado en segundo plano sin preguntar nada: instala **OpenSSH (puerto 22) + TightVNC localhost + Tailscale (`tag:remoto`)** y guarda el resumen (IP LAN e IP Tailscale) en `C:\ProgramData\Taller\install.log`.
+   - En **Windows 10/11** (32 y 64 bits) instala Tailscale `1.104.7`.
+   - En **Windows 7 / 8** (32 y 64 bits) instala automaticamente Tailscale `1.44.3` *(nota: Windows 7 requiere SP1 con parche SHA-2 `KB4474419` / `KB2921916` para que acepte el driver de red WinTUN)*.
 
 ### Opcion B: Desde Internet sin pendrive (1 linea en PowerShell)
 ```powershell

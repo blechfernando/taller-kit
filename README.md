@@ -1,7 +1,7 @@
 # Taller Kit — Control Remoto Multi-PC + Pendrive Multi-ISO
 
-Sistema unificado con **solo 2 acciones** en las PCs destino:
-1. **`1-CONECTAR`** (pendrive o web): deja la PC **fija y completa** para trabajar (OpenSSH puerto `22` en `C:\ProgramData\Taller`, TightVNC solo en `127.0.0.1:5900` por tunel SSH, y Tailscale listo para acceso por Internet aunque la PC se apague, cambie de Wi-Fi o te la lleves a otro local/deposito).
+Sistema unificado con **solo 2 acciones** en las PCs destino (Windows 7/8/10/11 en 32 y 64 bits + Linux):
+1. **`1-CONECTAR`** (pendrive o web): deja la PC **fija y completa** para trabajar (OpenSSH puerto `22` en `C:\ProgramData\Taller`, TightVNC solo en `127.0.0.1:5900` por tunel SSH, y Tailscale `1.104.7` en Win10/11 o `1.44.3` en Win7/8 para acceso por Internet aunque la PC se apague, cambie de Wi-Fi o te la lleves a otro local/deposito).
 2. **`2-LIMPIAR`** (pendrive, web o remoto `taller clean`): desinstala todo por completo (`TallerSSH`, TightVNC, `tailscale logout` + Tailscale, firewall y `C:\ProgramData\Taller`) cuando entregas la PC al cliente o la preparas para vender.
 
 Todo se controla desde tus PCs controladoras (`DESKTOP-LSDMKT9` y `lech`) o con agentes de IA, **sin instalar agentes de IA en las maquinas destino**.
