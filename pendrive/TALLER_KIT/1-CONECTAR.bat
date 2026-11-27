@@ -1,20 +1,26 @@
 @echo off
 setlocal
+set "TS_KEY="
+if exist "%~dp0config\tailscale-auth.txt" set "TS_KEY=FILE"
+if exist "%~dp0tailscale-auth.txt" set "TS_KEY=FILE"
+
+if defined TS_KEY (
+    net session >nul 2>&1
+    if %errorlevel% neq 0 (
+        set "__PS=%~dp0scripts\taller-setup.ps1"
+        powershell -NoProfile -Command "Start-Process powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',([char]34 + $env:__PS + [char]34),'-Quiet') -Verb RunAs -WindowStyle Minimized"
+        exit /b 0
+    )
+    start /min "" powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\taller-setup.ps1" -Quiet
+    exit /b 0
+)
+
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo Solicitando permisos de Administrador...
     set "__BAT=%~f0"
     powershell -NoProfile -Command "Start-Process -FilePath $env:__BAT -Verb RunAs"
     exit /b
-)
-
-set "TS_KEY="
-if exist "%~dp0config\tailscale-auth.txt" set "TS_KEY=FILE"
-if exist "%~dp0tailscale-auth.txt" set "TS_KEY=FILE"
-
-if defined TS_KEY (
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\taller-setup.ps1"
-    exit /b %errorlevel%
 )
 
 echo ============================================================

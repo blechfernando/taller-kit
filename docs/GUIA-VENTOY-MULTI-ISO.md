@@ -40,7 +40,7 @@ Usa un pendrive de **32 GB o 64 GB** (o mas grande si vas a guardar muchas ISOs)
    - `E:\ISO\`
    - `E:\ventoy\` (contiene `ventoy.json` y `autounattend\`)
    - `E:\TALLER_KIT\` (contiene `1-CONECTAR.bat`, `2-LIMPIAR.bat`, `linux-conectar.sh`, `scripts\`, `bin\` y `config\controllers.pub`)
-6. *(Opcional recomendado)* Crea `E:\TALLER_KIT\config\tailscale-auth.txt` pegando dentro tu Auth Key `tskey-auth-...` (`tag:remoto`) para que tanto `1-CONECTAR.bat` como las instalaciones Ventoy conecten Internet automaticamente.
+6. *(Opcional recomendado)* Crea `E:\TALLER_KIT\config\tailscale-auth.txt` pegando dentro tu Auth Key `tskey-auth-...` (`tag:remoto`). Con ese archivo presente, `1-CONECTAR.bat` corre **minimizado en segundo plano sin preguntas** (solo pide confirmar UAC) y deja log en `C:\ProgramData\Taller\install.log`, y las instalaciones Ventoy conectan Internet solas al terminar.
 7. Descarga o copia tus `.iso` dentro de `E:\ISO\` respetando estos nombres recomendados:
 
 | Archivo en `E:\ISO\` | Para que sirve | Plantilla automatica asociada |

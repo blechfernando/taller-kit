@@ -22,7 +22,7 @@ Todo se controla desde tus PCs controladoras (`DESKTOP-LSDMKT9` y `lech`) o con 
 
 ## Trucos cero-friccion (opcionales pero recomendados)
 
-- **Pendrive 100% automatico con Internet:** guarda tu Auth Key de Tailscale (`tskey-auth-...`) una sola vez en `TALLER_KIT\config\tailscale-auth.txt` dentro de tu pendrive fisico (no se sube a GitHub). Asi, cada vez que hagas doble clic en `1-CONECTAR.bat` o formatees con Ventoy, deja SSH + VNC + Tailscale **ya conectado sin pedirte nada**.
+- **Pendrive 100% automatico en segundo plano:** guarda tu Auth Key de Tailscale (`tskey-auth-...`) una sola vez en `TALLER_KIT\config\tailscale-auth.txt` dentro de tu pendrive fisico (no se sube a GitHub). Asi, al hacer doble clic en `1-CONECTAR.bat` (y aceptar UAC) se ejecuta **minimizado en segundo plano sin preguntas** y guarda el registro en `C:\ProgramData\Taller\install.log` (y al formatear con Ventoy corre solo al primer inicio).
 - **Activacion remota de Tailscale desde el controlador:** guarda tu Auth Key una sola vez en `%USERPROFILE%\.taller\tailscale.key`. Cuando conectes una PC por GitHub web apretando ENTER en el paso de la clave, la activas desde tu PC con `taller tailscale <destino> restobar`.
 
 ---

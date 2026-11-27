@@ -18,9 +18,23 @@ $KitRoot   = Split-Path -Parent $ScriptDir
 if (-not $BinDir)         { $BinDir = Join-Path $KitRoot "bin" }
 if (-not $ControllersPub) { $ControllersPub = Join-Path $KitRoot "config\controllers.pub" }
 
-function Write-Info { param([string]$Msg) Write-Host "[TALLER] $Msg" -ForegroundColor Cyan }
-function Write-Ok   { param([string]$Msg) Write-Host "[OK]     $Msg" -ForegroundColor Green }
-function Write-Warn { param([string]$Msg) Write-Host "[AVISO]  $Msg" -ForegroundColor Yellow }
+$TargetDir = "C:\ProgramData\Taller"
+$LogFile   = Join-Path $TargetDir "install.log"
+$LogReady  = $false
+
+function Write-Log {
+    param([string]$Line)
+    if (-not $LogReady) { return }
+    try {
+        $ts = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $enc = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::AppendAllText($LogFile, "[$ts] $Line`r`n", $enc)
+    } catch {}
+}
+
+function Write-Info { param([string]$Msg) Write-Host "[TALLER] $Msg" -ForegroundColor Cyan; Write-Log "[TALLER] $Msg" }
+function Write-Ok   { param([string]$Msg) Write-Host "[OK]     $Msg" -ForegroundColor Green; Write-Log "[OK] $Msg" }
+function Write-Warn { param([string]$Msg) Write-Host "[AVISO]  $Msg" -ForegroundColor Yellow; Write-Log "[AVISO] $Msg" }
 
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -202,16 +216,21 @@ if (-not $currentUser -or $currentUser -eq "$env:COMPUTERNAME`$") {
     try { $currentUser = (& whoami.exe).Split('\')[-1].Trim() } catch {}
 }
 
-$TargetDir   = "C:\ProgramData\Taller"
 $ServiceName = "TallerSSH"
 $FwRuleName  = "TallerSSH"
-
-Write-Info "Equipo: $env:COMPUTERNAME | Usuario: $currentUser | Sistema: $osShort ($arch) | Instalacion fija completa"
 
 if (-not (Test-Path $TargetDir)) {
     New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
 }
 Set-StrictAdminAcl -Path $TargetDir -Container
+$LogReady = $true
+Write-Utf8NoBom -Path $LogFile -Content ""
+trap {
+    if ($LogReady) { Write-Log ("[ERROR] " + $_.Exception.Message) }
+    break
+}
+
+Write-Info "Equipo: $env:COMPUTERNAME | Usuario: $currentUser | Sistema: $osShort ($arch) | Instalacion fija completa"
 
 # --- 1. TightVNC localhost-only (Session 0) ---
 $vncStatus = "Deshabilitado"
@@ -511,6 +530,8 @@ Write-Host "    taller tailscale $env:COMPUTERNAME $aliasHint   (activa Internet
 }
 Write-Host "  Al entregar al cliente o vender la PC, ejecuta 2-LIMPIAR.bat o 'taller clean'."
 Write-Host "============================================================" -ForegroundColor Green
+
+Write-Log "RESUMEN: Equipo=$env:COMPUTERNAME | Usuario=$currentUser | OS=$osShort ($arch) | LAN=$lanStr | TS=$tailscaleStatus | Puerto=$Port ($activeSshName) | VNC=$vncStatus"
 
 if (-not $Quiet) {
     Write-Host ""
