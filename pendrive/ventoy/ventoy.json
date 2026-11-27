@@ -1,0 +1,46 @@
+{
+  "control": [
+    { "VTOY_WIN11_BYPASS_CHECK": "1" },
+    { "VTOY_WIN11_BYPASS_NRO": "1" },
+    { "VTOY_DEFAULT_MENU_MODE": "0" }
+  ],
+  "menu_alias": [
+    { "image": "/ISO/Win11.iso", "alias": "Windows 11 Pro/Home (Auto + Taller SSH)" },
+    { "image": "/ISO/Win10.iso", "alias": "Windows 10 (Auto + Taller SSH)" },
+    { "image": "/ISO/Tiny10.iso", "alias": "Tiny10 Liviano (PCs viejas + Taller SSH)" },
+    { "image": "/ISO/Win7_x64.iso", "alias": "Windows 7 SP1 64-bit (Escaner / Legacy + Taller SSH)" },
+    { "image": "/ISO/Win7_x86.iso", "alias": "Windows 7 SP1 32-bit (Escaner 32-bit + Taller SSH)" },
+    { "image": "/ISO/ubuntu-24.04-live-server-amd64.iso", "alias": "Ubuntu 24.04 LTS Server (Auto + Taller SSH)" },
+    { "image": "/ISO/ubuntu-24.04.5-live-server-amd64.iso", "alias": "Ubuntu 24.04.5 LTS Server (Auto + Taller SSH)" }
+  ],
+  "auto_install": [
+    {
+      "image": "/ISO/Win11.iso",
+      "template": [ "/ventoy/autounattend/win10-11-taller.xml" ]
+    },
+    {
+      "image": "/ISO/Win10.iso",
+      "template": [ "/ventoy/autounattend/win10-11-taller.xml" ]
+    },
+    {
+      "image": "/ISO/Tiny10.iso",
+      "template": [ "/ventoy/autounattend/win10-11-taller.xml" ]
+    },
+    {
+      "image": "/ISO/Win7_x64.iso",
+      "template": [ "/ventoy/autounattend/win7-taller.xml" ]
+    },
+    {
+      "image": "/ISO/Win7_x86.iso",
+      "template": [ "/ventoy/autounattend/win7-x86-taller.xml" ]
+    },
+    {
+      "image": "/ISO/ubuntu-24.04-live-server-amd64.iso",
+      "template": [ "/ventoy/autounattend/ubuntu-autoinstall/user-data" ]
+    },
+    {
+      "image": "/ISO/ubuntu-24.04.5-live-server-amd64.iso",
+      "template": [ "/ventoy/autounattend/ubuntu-autoinstall/user-data" ]
+    }
+  ]
+}

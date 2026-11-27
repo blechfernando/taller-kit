@@ -1,0 +1,23 @@
+{
+  "hosts": {
+    "lech": {
+      "host": "192.168.3.179",
+      "user": "blech",
+      "port": 22,
+      "os": "windows",
+      "shell": "bash",
+      "role": "controlador",
+      "notes": "PC fija del taller (DESKTOP-SHO7RNL)"
+    },
+    "casa-a": {
+      "host": "192.168.3.161",
+      "tailscale_ip": "100.126.234.52",
+      "user": "Blech",
+      "port": 22,
+      "os": "windows",
+      "shell": "powershell",
+      "role": "controlador",
+      "notes": "PC principal (DESKTOP-LSDMKT9)"
+    }
+  }
+}

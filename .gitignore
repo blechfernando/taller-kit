@@ -1,0 +1,13 @@
+pendrive/TALLER_KIT/bin/
+pendrive/ISO/
+tools/ventoy/
+controller/tvnviewer/
+*.key
+*.secret
+*.pass
+tailscale-auth.txt
+controller/hosts.local.json
+*.png
+*.log
+*.img
+__pycache__/

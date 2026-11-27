@@ -1,0 +1,27 @@
+#cloud-config
+autoinstall:
+  version: 1
+  locale: en_US.UTF-8
+  timezone: America/Argentina/Buenos_Aires
+  keyboard:
+    layout: es
+  interactive-sections:
+    - storage
+  identity:
+    hostname: taller-ubuntu
+    username: taller
+    password: "$6$AtMfpsuaJPaPXs6x$LbMx0rK7De2rjGBcn/H9/pSndFcsdXskKEODCH8.7yO6Ck9iul0RMJv8idcQSjzswEEeg0kCILw3PSxqcC2n3/"
+  ssh:
+    install-server: true
+    allow-pw: false
+    authorized-keys:
+      # >>> TALLER-KEYS >>>
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMeFaZdCxU1ghpcSSx4Z0zuoC5OJeqynpH+1p6n7A0R7 DESKTOP-LSDMKT9"
+      - "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOm+ZYxHf6nUNY/kWpK/dotRECquhcMU6M3iAcGuWtOS lech-DESKTOP-SHO7RNL"
+      # <<< TALLER-KEYS <<<
+  packages:
+    - curl
+    - openssh-server
+  late-commands:
+    - curtin in-target --target=/target -- bash -c "mkdir -p /etc/ssh/sshd_config.d && printf 'PubkeyAuthentication yes\nPasswordAuthentication no\nAllowTcpForwarding yes\nVersionAddendum TALLER:%s\n' \"\$(printf '%s|taller|Linux|VNC=0' \"\$(cat /etc/hostname)\" | base64 -w0)\" > /etc/ssh/sshd_config.d/99-taller.conf"
+    - curtin in-target --target=/target -- bash -c "printf 'taller ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/90-taller && chmod 440 /etc/sudoers.d/90-taller"
