@@ -65,12 +65,13 @@ function Show-Help {
     Write-Host "    taller vnc <destino>                Abre ventana TightVNC interactiva"
     Write-Host ""
     Write-Host "  ADMINISTRACION Y RED:" -ForegroundColor Yellow
-    Write-Host "    taller clean <destino>              Limpia acceso temporal de PC cliente"
+    Write-Host "    taller tailscale <destino> [alias] [--key k]  Activa acceso por Internet en destino"
+    Write-Host "    taller clean <destino> [--force]              Desinstala TallerSSH/VNC/Tailscale del destino"
     Write-Host "    taller add-host <alias> <ip> <user> [puerto] [notas]"
-    Write-Host "    taller serve [puerto]               Sirve el kit web + binarios por LAN (def 8787)"
-    Write-Host "    taller sync-keys [--push]           Sincroniza controllers.pub (y push por SSH)"
+    Write-Host "    taller serve [puerto]                         Sirve el kit web + binarios por LAN (def 8787)"
+    Write-Host "    taller sync-keys [--push]                     Sincroniza controllers.pub (y push por SSH)"
     Write-Host ""
-    Write-Host "  <destino> acepta: alias (lech, restobar), 'ultimo' (ultimo cliente escaneado),"
+    Write-Host "  <destino> acepta: alias (lech, restobar), 'ultimo' (ultima PC conectada),"
     Write-Host "  hostname, nombre Tailscale, IP directa o usuario@ip."
     Write-Host ""
 }
@@ -157,12 +158,18 @@ function Get-PrimaryLanIp {
 
 function Get-TailscalePeers {
     $peers = @()
+    $tsPath = ""
     $tsCmd = Get-Command tailscale -ErrorAction SilentlyContinue
-    if (-not $tsCmd) { return $peers }
+    if ($tsCmd) {
+        $tsPath = $tsCmd.Source
+    } elseif (Test-Path (Join-Path $env:ProgramFiles "Tailscale\tailscale.exe")) {
+        $tsPath = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
+    }
+    if (-not $tsPath) { return $peers }
     try {
-        $raw = & $tsCmd.Source status --json 2>$null
+        $raw = & $tsPath status --json 2>$null
         if ($LASTEXITCODE -ne 0 -or -not $raw) { return $peers }
-        $st = $raw | ConvertFrom-Json
+        $st = ($raw -join "`n") | ConvertFrom-Json
         if ($st.Peer) {
             foreach ($pProp in $st.Peer.PSObject.Properties) {
                 $p = $pProp.Value
@@ -233,7 +240,7 @@ function Invoke-ScanBatch {
                 os       = $os
                 vnc      = $vnc
                 banner   = $banner
-                source   = if ($j.Port -eq 2222) { "cliente" } else { "lan" }
+                source   = if ($j.Port -eq 2222) { "cliente" } elseif ($banner -like "*TALLER:*") { "taller" } else { "lan" }
             }
         }
         try { $j.Client.Close() } catch {}
@@ -273,7 +280,7 @@ function Invoke-Scan {
         }
     }
 
-    $tsPeers = Get-TailscalePeers
+    $tsPeers = @(Get-TailscalePeers)
     foreach ($tp in $tsPeers) {
         if ($tp.online) {
             $b = Read-TallerBanner -Ip $tp.ip -Port 22 -TimeoutMs 600
@@ -326,7 +333,7 @@ function Invoke-List {
     }
     if ($rows.Count -gt 0) { $rows | Format-Table -AutoSize } else { Write-Host "(vacio)" }
 
-    $tsPeers = Get-TailscalePeers
+    $tsPeers = @(Get-TailscalePeers)
     if ($tsPeers.Count -gt 0) {
         Write-Host "=== PEERS EN TAILSCALE ===" -ForegroundColor Cyan
         $tsPeers | Select-Object @{N='NOMBRE';E={$_.hostname}}, @{N='IP';E={$_.ip}}, @{N='ONLINE';E={$_.online}}, @{N='OS';E={$_.os}}, @{N='TAGS';E={$_.tags}} | Format-Table -AutoSize
@@ -353,11 +360,24 @@ function Resolve-TallerTarget {
         try { $scanHosts = @((Get-Content -Raw $ScanCache | ConvertFrom-Json).hosts) } catch {}
     }
 
-    # 1. 'ultimo' -> ultimo cliente en puerto 2222 (o ultimo host escaneado)
+    # 1. 'ultimo' -> PC mas reciente no-controladora en last-scan.json (prioriza banner TALLER:)
     if ($tLow -eq "ultimo" -or $tLow -eq "last") {
-        $cand = $scanHosts | Where-Object { $_.port -eq 2222 } | Select-Object -First 1
-        if (-not $cand) { $cand = $scanHosts | Select-Object -First 1 }
-        if (-not $cand) { throw "No hay escaneo reciente. Ejecuta primero: taller scan" }
+        $ctrlNames = @("casa-a", "lech", $Config.self_name.ToLower(), $env:COMPUTERNAME.ToLower())
+        $ctrlIps   = @()
+        foreach ($p in $inv.hosts.PSObject.Properties) {
+            if ($p.Value.role -eq "controlador" -or $ctrlNames -contains $p.Name.ToLower()) {
+                $ctrlNames += $p.Name.ToLower()
+                if ($p.Value.host) { $ctrlIps += [string]$p.Value.host }
+                if ($p.Value.tailscale_ip) { $ctrlIps += [string]$p.Value.tailscale_ip }
+            }
+        }
+        $nonCtrl = @($scanHosts | Where-Object {
+            $hn = if ($_.hostname) { $_.hostname.ToLower() } else { "" }
+            ($ctrlNames -notcontains $hn) -and ($ctrlIps -notcontains $_.ip)
+        })
+        $cand = $nonCtrl | Where-Object { $_.banner -like "*TALLER:*" -or $_.port -eq 2222 } | Select-Object -First 1
+        if (-not $cand) { $cand = $nonCtrl | Select-Object -First 1 }
+        if (-not $cand) { throw "No hay PC nueva detectada en el ultimo escaneo. Ejecuta primero: taller scan" }
         return [PSCustomObject]@{
             alias = if ($cand.hostname) { $cand.hostname } else { $cand.ip }
             ip    = [string]$cand.ip
@@ -412,7 +432,7 @@ function Resolve-TallerTarget {
     }
 
     # 5. Peer en Tailscale
-    $tsPeers = Get-TailscalePeers
+    $tsPeers = @(Get-TailscalePeers)
     $tsMatch = $tsPeers | Where-Object { $_.hostname.ToLower() -eq $tLow -or $_.ip -eq $Target } | Select-Object -First 1
     if ($tsMatch) {
         $b = Read-TallerBanner -Ip $tsMatch.ip -Port 22 -TimeoutMs 700
@@ -515,8 +535,11 @@ function With-VncTunnel {
 
 # --- Despacho de comandos ---
 if ($RawArgs.Count -eq 0) { Show-Help; exit 0 }
-$cmd = $RawArgs[0].ToLower()
-$rest = if ($RawArgs.Count -gt 1) { $RawArgs[1..($RawArgs.Count - 1)] } else { @() }
+$cmd = [string]$RawArgs[0].ToLower()
+[string[]]$rest = @()
+if ($RawArgs.Count -gt 1) {
+    $rest = [string[]]@($RawArgs[1..($RawArgs.Count - 1)])
+}
 
 switch ($cmd) {
     "help" { Show-Help }
@@ -643,25 +666,102 @@ switch ($cmd) {
         }
     }
 
-    "clean" {
-        if ($rest.Count -lt 1) { throw "Uso: taller clean <destino>" }
+    "tailscale" {
+        if ($rest.Count -lt 1) { throw "Uso: taller tailscale <destino> [alias] [--key <tskey>]" }
         $t = Resolve-TallerTarget -Target $rest[0]
-        Write-Host "[CLEAN] Limpiando acceso temporal en $($t.alias) ($($t.user)@$($t.ip):$($t.port))..." -ForegroundColor Cyan
+        $tsAlias = ""
+        $tsKey   = ""
+        for ($i = 1; $i -lt $rest.Count; $i++) {
+            if ($rest[$i] -eq "--key" -and ($i + 1) -lt $rest.Count) {
+                $tsKey = $rest[$i + 1]; $i++
+            } elseif (-not $rest[$i].StartsWith("--") -and -not $tsAlias) {
+                $tsAlias = $rest[$i]
+            }
+        }
+        if (-not $tsKey) {
+            $keyCands = @(
+                (Join-Path $StateDir "tailscale.key"),
+                $(if ($Config.repo_dir) { Join-Path $Config.repo_dir "pendrive\TALLER_KIT\config\tailscale-auth.txt" }),
+                $(if ($Config.repo_dir) { Join-Path $Config.repo_dir "pendrive\TALLER_KIT\tailscale-auth.txt" })
+            )
+            foreach ($kc in $keyCands) {
+                if ($kc -and (Test-Path $kc)) {
+                    foreach ($line in ([IO.File]::ReadAllText($kc) -split "`r?`n")) {
+                        $tr = $line.Trim()
+                        if ($tr -and -not $tr.StartsWith("#")) { $tsKey = $tr; break }
+                    }
+                    if ($tsKey) { break }
+                }
+            }
+        }
+        if (-not $tsKey) {
+            throw "No se encontro Auth Key de Tailscale. Guardala en $StateDir\tailscale.key o pasala con --key tskey-auth-..."
+        }
+        Write-Host "[TAILSCALE] Activando Internet en $($t.alias) ($($t.user)@$($t.ip):$($t.port))..." -ForegroundColor Cyan
         if ($t.os -like "*linux*") {
-            & ssh.exe -i $Config.identity_file -p $t.port -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$($t.user)@$($t.ip)" "nohup sudo bash -c 'sleep 2; kill `$(cat /opt/taller-tmp/sshd.pid 2>/dev/null) 2>/dev/null || true; kill `$(cat /opt/taller-tmp/x11vnc.pid 2>/dev/null) 2>/dev/null || true; rm -rf /opt/taller-tmp' >/dev/null 2>&1 &"
+            $hArg = if ($tsAlias) { " --hostname='$tsAlias'" } else { "" }
+            & ssh.exe -i $Config.identity_file -p $t.port -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$($t.user)@$($t.ip)" "sudo tailscale up --authkey='$tsKey' --advertise-tags=tag:remoto$hArg && tailscale ip -4"
+        } else {
+            $hFlag = if ($tsAlias) { "--hostname=$tsAlias" } else { "" }
+            $psTs = @"
+`$ErrorActionPreference = 'Stop'
+`$tsExe = Join-Path `$env:ProgramFiles 'Tailscale\tailscale.exe'
+if (-not (Test-Path `$tsExe)) { throw 'Tailscale no esta instalado en esta PC.' }
+`$argsList = @('up', '--authkey=$tsKey', '--advertise-tags=tag:remoto', '--unattended')
+if ('$hFlag') { `$argsList += '$hFlag' }
+& `$tsExe @argsList
+if (`$LASTEXITCODE -ne 0) { throw "tailscale up fallo con codigo `$LASTEXITCODE" }
+Start-Sleep -Seconds 2
+`$ip4 = (& `$tsExe ip -4 2>`$null | Select-Object -First 1).Trim()
+Write-Output "TAILSCALE_OK `$ip4"
+"@
+            $out = Invoke-RemoteEncodedPs -TargetObj $t -ScriptText $psTs
+            $out | ForEach-Object { Write-Host $_ }
+            $tsIpFound = ""
+            foreach ($line in @($out)) {
+                if ([string]$line -match 'TAILSCALE_OK\s+(\d+\.\d+\.\d+\.\d+)') { $tsIpFound = $Matches[1] }
+            }
+            if ($tsIpFound) {
+                $addAlias = if ($tsAlias) { $tsAlias.ToLower() } else { $t.alias.ToLower() }
+                Write-Host "[OK] Para registrarla con alias ejecuta: taller add-host $addAlias $tsIpFound $($t.user) $($t.port)" -ForegroundColor Green
+            }
+        }
+    }
+
+    "clean" {
+        if ($rest.Count -lt 1) { throw "Uso: taller clean <destino> [--force]" }
+        $forceClean = ($rest -contains "--force") -or ($rest -contains "-Force")
+        $t = Resolve-TallerTarget -Target $rest[0]
+
+        $inv = Get-HostsInventory
+        $isProtected = @("casa-a", "lech", $Config.self_name.ToLower()) -contains $t.alias.ToLower()
+        foreach ($p in $inv.hosts.PSObject.Properties) {
+            if (($p.Name.ToLower() -eq $t.alias.ToLower() -or $p.Value.host -eq $t.ip -or $p.Value.tailscale_ip -eq $t.ip) -and $p.Value.role -eq "controlador") {
+                $isProtected = $true
+            }
+        }
+        if ($isProtected -and -not $forceClean) {
+            throw "Proteccion: '$($t.alias)' es una PC controladora fija. Si realmente queres limpiarla, agrega --force."
+        }
+
+        Write-Host "[CLEAN] Desinstalando acceso del taller en $($t.alias) ($($t.user)@$($t.ip):$($t.port))..." -ForegroundColor Cyan
+        if ($t.os -like "*linux*") {
+            & ssh.exe -i $Config.identity_file -p $t.port -o BatchMode=yes -o StrictHostKeyChecking=accept-new "$($t.user)@$($t.ip)" "nohup sudo bash -c 'sleep 2; if [ -f /etc/taller/installed_tailscale.flag ] && command -v tailscale >/dev/null; then tailscale logout || true; systemctl disable --now tailscaled || true; fi; rm -f /etc/ssh/sshd_config.d/99-taller.conf; rm -rf /etc/taller /opt/taller-tmp; systemctl reload ssh || systemctl reload sshd || true' >/dev/null 2>&1 &"
         } else {
             $psClean = @"
-if (Test-Path 'C:\TallerTmp\taller-clean.ps1') {
+if (Test-Path 'C:\ProgramData\Taller\taller-clean.ps1') {
+    & 'C:\ProgramData\Taller\taller-clean.ps1' -Detached -Quiet
+} elseif (Test-Path 'C:\TallerTmp\taller-clean.ps1') {
     & 'C:\TallerTmp\taller-clean.ps1' -Detached -Quiet
 } else {
-    `$c = 'ping 127.0.0.1 -n 4 >nul & sc stop TallerSSH >nul 2>&1 & ping 127.0.0.1 -n 2 >nul & sc delete TallerSSH >nul 2>&1 & netsh advfirewall firewall delete rule name=TallerSSH-Cliente >nul 2>&1 & rmdir /s /q C:\TallerTmp >nul 2>&1'
+    `$c = 'ping 127.0.0.1 -n 4 >nul & sc stop TallerSSH >nul 2>&1 & ping 127.0.0.1 -n 2 >nul & sc delete TallerSSH >nul 2>&1 & netsh advfirewall firewall delete rule name=TallerSSH >nul 2>&1 & netsh advfirewall firewall delete rule name=TallerSSH-Cliente >nul 2>&1 & netsh advfirewall firewall delete rule name=TallerSSH-Permanente >nul 2>&1 & rmdir /s /q C:\ProgramData\Taller >nul 2>&1 & rmdir /s /q C:\TallerTmp >nul 2>&1'
     Start-Process cmd.exe -ArgumentList "/c `$c" -WindowStyle Hidden
     Write-Output 'LIMPIEZA_INLINE_OK'
 }
 "@
             Invoke-RemoteEncodedPs -TargetObj $t -ScriptText $psClean
         }
-        Write-Host "[OK] Limpieza disparada en $($t.alias)." -ForegroundColor Green
+        Write-Host "[OK] Limpieza completa disparada en $($t.alias)." -ForegroundColor Green
     }
 
     "add-host" {

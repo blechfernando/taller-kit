@@ -1,9 +1,19 @@
 param(
-    [switch]$IncludePermanent,
+    [string]$BaseUrl = "",
     [switch]$Quiet
 )
 
 $ErrorActionPreference = "SilentlyContinue"
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+} catch {}
+
+$DefaultBaseUrl = "https://raw.githubusercontent.com/blechfernando/taller-kit/main/web"
+if (-not $BaseUrl) {
+    $BaseUrl = if ($env:TALLER_BASE_URL) { $env:TALLER_BASE_URL.TrimEnd("/") } else { $DefaultBaseUrl }
+} else {
+    $BaseUrl = $BaseUrl.TrimEnd("/")
+}
 
 function Test-IsAdminClean {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -12,62 +22,47 @@ function Test-IsAdminClean {
 }
 
 if (-not (Test-IsAdminClean)) {
-    Write-Host "[ERROR] Ejecuta PowerShell como Administrador para limpiar el equipo." -ForegroundColor Red
-    if (-not $Quiet) { Read-Host "Presiona ENTER para salir" | Out-Null }
-    exit 1
-}
-
-if (Test-Path "C:\TallerTmp\scripts\taller-clean.ps1") {
-    & "C:\TallerTmp\scripts\taller-clean.ps1" -IncludePermanent:$IncludePermanent -Quiet:$Quiet
+    $tmp = Join-Path $env:TEMP "taller-web-limpiar.ps1"
+    $uri = "$BaseUrl/limpiar.ps1"
+    if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+        & curl.exe -fSL --retry 2 -o $tmp $uri
+    } else {
+        Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $tmp
+    }
+    $extra = if ($Quiet) { " -Quiet" } else { "" }
+    Write-Host "[TALLER] Solicitando permisos de Administrador..." -ForegroundColor Yellow
+    Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$tmp`" -BaseUrl `"$BaseUrl`"$extra" -Verb RunAs
     exit 0
 }
 
-Write-Host "[TALLER] Eliminando acceso temporal del taller..." -ForegroundColor Cyan
-$svc = Get-Service -Name "TallerSSH"
-if ($svc) {
-    Stop-Service -Name "TallerSSH" -Force
-    Start-Sleep -Milliseconds 500
-    & sc.exe delete "TallerSSH" | Out-Null
-}
-& netsh.exe advfirewall firewall delete rule name="TallerSSH-Cliente" | Out-Null
-
-if (Test-Path "C:\TallerTmp\installed_tightvnc.flag") {
-    Stop-Service -Name "tvnserver" -Force
-    $regRoots = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-    )
-    $item = Get-ItemProperty $regRoots | Where-Object { $_.DisplayName -like "TightVNC*" } | Select-Object -First 1
-    if ($item -and ($item.PSChildName -match '^\{[0-9A-Fa-f-]+\}$')) {
-        Start-Process -FilePath "msiexec.exe" -ArgumentList "/x $($item.PSChildName) /qn /norestart" -Wait
-    }
+if (Test-Path "C:\ProgramData\Taller\taller-clean.ps1") {
+    & "C:\ProgramData\Taller\taller-clean.ps1" -Quiet:$Quiet
+    exit 0
 }
 
-Remove-Item -Recurse -Force "C:\TallerTmp"
-Remove-Item -Recurse -Force (Join-Path $env:TEMP "taller-web-cache")
-Remove-Item -Force (Join-Path $env:TEMP "taller-web-bootstrap.ps1")
+if (Test-Path "C:\TallerTmp\taller-clean.ps1") {
+    & "C:\TallerTmp\taller-clean.ps1" -Quiet:$Quiet
+    exit 0
+}
 
-if ($IncludePermanent) {
-    $wmiSvc = Get-WmiObject Win32_Service -Filter "Name='sshd'"
-    if ($wmiSvc -and ([string]$wmiSvc.PathName -like "*\Taller\openssh\sshd.exe*")) {
-        Stop-Service -Name "sshd" -Force
-        Start-Sleep -Milliseconds 500
-        & sc.exe delete "sshd" | Out-Null
-    }
-    & netsh.exe advfirewall firewall delete rule name="TallerSSH-Permanente" | Out-Null
-    if (Test-Path "C:\ProgramData\Taller\installed_tightvnc.flag") {
-        Stop-Service -Name "tvnserver" -Force
-        $regRoots = @(
-            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-        )
-        $item = Get-ItemProperty $regRoots | Where-Object { $_.DisplayName -like "TightVNC*" } | Select-Object -First 1
-        if ($item -and ($item.PSChildName -match '^\{[0-9A-Fa-f-]+\}$')) {
-            Start-Process -FilePath "msiexec.exe" -ArgumentList "/x $($item.PSChildName) /qn /norestart" -Wait
+$repoRootBase = $BaseUrl -replace '/web$', ''
+$tmpClean = Join-Path $env:TEMP "taller-clean-remote.ps1"
+foreach ($u in @("$BaseUrl/scripts/taller-clean.ps1", "$repoRootBase/pendrive/TALLER_KIT/scripts/taller-clean.ps1")) {
+    try {
+        if (Get-Command curl.exe -ErrorAction SilentlyContinue) {
+            & curl.exe -fSL --retry 2 -o $tmpClean $u
+        } else {
+            Invoke-WebRequest -UseBasicParsing -Uri $u -OutFile $tmpClean
         }
-    }
-    Remove-Item -Recurse -Force "C:\ProgramData\Taller"
+        if ((Test-Path $tmpClean) -and ((Get-Item $tmpClean).Length -gt 0)) { break }
+    } catch {}
 }
 
-Write-Host "[OK] PC limpia." -ForegroundColor Green
-if (-not $Quiet) { Read-Host "Presiona ENTER para cerrar" | Out-Null }
+if (Test-Path $tmpClean) {
+    & $tmpClean -Quiet:$Quiet
+    Remove-Item -Force $tmpClean -ErrorAction SilentlyContinue
+} else {
+    Write-Host "[ERROR] No se pudo descargar taller-clean.ps1." -ForegroundColor Red
+    if (-not $Quiet) { Read-Host "Presiona ENTER para salir" | Out-Null }
+    exit 1
+}

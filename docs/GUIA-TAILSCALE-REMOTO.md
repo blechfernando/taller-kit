@@ -1,15 +1,15 @@
 # Guia de Acceso Remoto por Internet (Tailscale)
 
-Esta guia explica como conectarte **desde tu casa/taller a PCs externas por Internet** — por ejemplo la PC de tu mama (para ayudarla con Excel) o la caja del resto bar de tu amigo (para reconfigurar su impresora termica sin viajar) — **manteniendo tu red de casa y taller 100% aislada**.
+Esta guia explica como conectarte **desde tu casa/taller a cualquier PC por Internet** — ya sea una PC tuya en otro local/deposito, una PC de cliente que va y viene, la PC de tu mama o la caja del resto bar de tu amigo — **manteniendo tu red de casa y taller 100% aislada**.
 
 ---
 
 ## 1. Como funciona el aislamiento (seguridad)
 
-Usamos **Tailscale** con una etiqueta especial `tag:remoto` y una regla ACL **en una sola direccion**:
-- **Tus PCs controladoras** (esta PC `DESKTOP-LSDMKT9`, `lech`, tu usuario) **SI pueden iniciar conexion** hacia cualquier PC etiquetada `tag:remoto`.
+Usamos **Tailscale** con la etiqueta `tag:remoto` y una regla ACL **en una sola direccion**:
+- **Tus PCs controladoras** (`DESKTOP-LSDMKT9` / `casa-a` y `lech`) **SI pueden iniciar conexion** hacia cualquier PC etiquetada `tag:remoto`.
 - **Las PCs `tag:remoto` NO pueden ver ni conectarse** a tus PCs de casa, ni a tus camaras, ni a otras PCs remotas entre si. Solo responden cuando vos te conectas.
-- Ademas, en cada PC remota el servidor grafico TightVNC escucha **exclusivamente en `127.0.0.1:5900`**, asi que nadie ni nada en la red del resto bar ni en Internet puede ver la pantalla sin pasar primero por tu clave SSH privada.
+- Ademas, en cada PC el servidor grafico TightVNC escucha **exclusivamente en `127.0.0.1:5900`**, asi que nadie en la red del resto bar ni en Internet puede ver la pantalla sin pasar primero por tu clave SSH privada.
 
 ---
 
@@ -17,7 +17,7 @@ Usamos **Tailscale** con una etiqueta especial `tag:remoto` y una regla ACL **en
 
 1. Entra al panel de Tailscale con tu cuenta (`blechfernando@`):
    `https://login.tailscale.com/admin/acls`
-2. Asegurate de tener definidas las `tagOwners` y las `acls` con esta logica (adaptando si ya tenes otras reglas):
+2. Asegurate de tener definidas las `tagOwners` y las `acls`:
 
 ```json
 {
@@ -25,67 +25,66 @@ Usamos **Tailscale** con una etiqueta especial `tag:remoto` y una regla ACL **en
     "tag:remoto": ["autogroup:admin"]
   },
   "acls": [
-    // Tus dispositivos propios (sin tag:remoto) pueden hablar entre si
     {
       "action": "accept",
       "src": ["autogroup:member"],
       "dst": ["autogroup:member:*"]
     },
-    // Tus controladores pueden entrar a las PCs remotas (SSH y servicios)
     {
       "action": "accept",
       "src": ["autogroup:member"],
       "dst": ["tag:remoto:*"]
     }
-    // IMPORTANTE: tag:remoto NO aparece en "src", asi que NO puede
-    // iniciar conexiones hacia tu casa, tu taller ni otros clientes.
   ]
 }
 ```
+*(Como `tag:remoto` no aparece en `"src"`, ninguna PC conectada con `tag:remoto` puede iniciar conexiones hacia tu casa, tus camaras ni otros clientes.)*
 3. Guarda las ACLs (**Save**).
 
 ---
 
-## 3. Crear una Auth Key reutilizable para dar de alta PCs externas
+## 3. Crear una Auth Key reutilizable para dar de alta PCs
 
 1. Ve a **Settings -> Keys -> Generate auth key**:
    `https://login.tailscale.com/admin/settings/keys`
 2. Configura:
-   - **Reusable:** activado (si vas a dar de alta varias PCs, ej. resto bar + mama; o genera una por vez de un solo uso si preferis maxima seguridad).
+   - **Reusable:** activado (si vas a dar de alta varias PCs; o de un solo uso si preferis).
    - **Expiration:** 90 dias.
    - **Tags:** selecciona `tag:remoto`.
 3. Copia la clave generada (`tskey-auth-...`).
-   > **Importante:** nunca subas esta clave a GitHub ni a ningun repositorio publico. Si la guardas en tu pendrive privado dentro de `TALLER_KIT\tailscale-auth.txt`, manten el pendrive bajo tu control (y `.gitignore` ya la ignora para no subirla por accidente).
+   > **Importante:** nunca subas esta clave a GitHub. Guardala solo en lugares privados ignorados por git:
+   > - En tu **pendrive privado** como `TALLER_KIT\config\tailscale-auth.txt` (asi `1-CONECTAR.bat` y Ventoy conectan Internet solos sin pedirla).
+   > - En tu **PC controladora** como `%USERPROFILE%\.taller\tailscale.key` (asi `taller tailscale <destino>` la lee automatico).
 
 ---
 
-## 4. Como conectar una PC externa (2 formas)
+## 4. Como conectar una PC (siempre fija: LAN + Internet)
 
 ### Opcion A: Con el pendrive
-1. Enchufa el pendrive en la PC de tu amigo o de tu mama.
-2. Doble clic en `TALLER_KIT\4-REMOTO-INTERNET.bat`.
-3. Escribi el nombre corto (ej: `restobar` o `mama`) y pega tu `tskey-auth-...` (o dejalo en `tailscale-auth.txt`).
-4. En ~30 segundos instala OpenSSH + TightVNC localhost + Tailscale con `tag:remoto`, y te muestra en pantalla la **IP Tailscale** (`100.x.y.z`) y el usuario.
+1. Enchufa el pendrive y doble clic en `TALLER_KIT\1-CONECTAR.bat`.
+2. Si pusiste `tailscale-auth.txt` en el pendrive, no te pregunta nada: instala **OpenSSH (puerto 22) + TightVNC localhost + Tailscale (`tag:remoto`)** y al final muestra la IP LAN y la IP Tailscale.
 
-### Opcion B: Desde Internet sin pendrive (1 linea en PowerShell como Admin)
+### Opcion B: Desde Internet sin pendrive (1 linea en PowerShell)
 ```powershell
 irm https://raw.githubusercontent.com/blechfernando/taller-kit/main/web/conectar.ps1 | iex
 ```
-Elegi la **opcion `[3] Remoto por Internet`**, ingresa el alias (`restobar`) y tu Auth Key.
-
-*(Si la PC externa tiene Windows 7 o solo necesitas mirar/tocar la pantalla una vez con asistencia de la persona en vivo, usa `5-PANTALLA-RAPIDA-RUSTDESK.bat` o la opcion `[4]` de la web).*
+1. Podes poner un nombre corto (ej: `restobar`, `mama`, `deposito`) y tu Auth Key — o apretar **ENTER** en la Auth Key para no escribir secretos en la otra PC.
+2. Si apretaste ENTER, igual queda todo instalado (`TallerSSH` + TightVNC + Tailscale MSI), y desde tu casa activas Tailscale remoto en 1 segundo:
+   ```powershell
+   taller tailscale <destino> restobar
+   ```
 
 ---
 
-## 5. Registrar la PC remota en tu controlador y usarla
+## 5. Registrar y usar la PC remota
 
-Una vez que tengas la IP Tailscale (por ejemplo `100.90.10.25` y usuario `Caja`), registrala con un alias comodo desde esta PC o desde `lech`:
+Una vez que tengas la IP Tailscale (por ejemplo `100.90.10.25` y usuario `Caja`), registrala con un alias comodo:
 
 ```powershell
 taller add-host restobar 100.90.10.25 Caja 22 "Impresora termica resto bar"
 ```
 
-Despues, en cualquier momento desde tu casa:
+Despues, desde cualquiera de tus controladoras (`casa-a` o `lech`, ambos ya tienen Tailscale funcionando):
 - **Entrar por consola o arreglar la impresora:**
   ```powershell
   taller ssh restobar "powershell -Command Get-Printer"
@@ -94,7 +93,7 @@ Despues, en cualquier momento desde tu casa:
   ```powershell
   taller scp .\driver_termica.exe restobar:C:\Temp\
   ```
-- **Ver la pantalla de Excel de tu mama o del POS del resto bar:**
+- **Ver o tocar la pantalla (Excel de tu mama, POS del resto bar, escaner):**
   ```powershell
   taller vnc mama
   ```
@@ -102,9 +101,11 @@ Despues, en cualquier momento desde tu casa:
 
 ---
 
-## 6. Activar Tailscale tambien en `lech` (opcional)
+## 6. Al entregar la PC al cliente o venderla
 
-`lech` actualmente solo esta en tu red local (`192.168.3.179`). Si queres que **los agentes desde `lech`** tambien lleguen a `restobar` o `mama` por Internet:
-1. Copia o ejecuta [tailscale-amd64.msi](file:///D:/viernes/pendrive/TALLER_KIT/bin/tailscale-amd64.msi) en `lech`.
-2. Inicia sesion en Tailscale con tu cuenta `blechfernando@`.
-3. Copia la linea de `hosts.json` del controlador o ejecuta `taller add-host restobar ...` en `lech`.
+Cuando una PC ya no sea tuya ni quede bajo tu soporte, limpia todo rastro con un solo clic o comando:
+- Desde el pendrive: doble clic en `TALLER_KIT\2-LIMPIAR.bat`
+- Por Internet (1 linea): `irm https://raw.githubusercontent.com/blechfernando/taller-kit/main/web/limpiar.ps1 | iex`
+- Desde tu PC: `taller clean <destino>`
+
+Esto hace `tailscale logout` (saca el equipo de tu red Tailscale), desinstala Tailscale y TightVNC (si los instalo el kit), borra `TallerSSH`, cierra el firewall y elimina `C:\ProgramData\Taller`.

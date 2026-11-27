@@ -21,8 +21,10 @@ NOTA:
   en \ISO\ aunque no este en esta tabla: Ventoy las bootea igual!
 - Cuando elijas una ISO de la tabla, Ventoy pregunta si queres:
     [0] Boot sin plantilla (instalacion normal)
-    [1] Boot con plantilla Taller (crea usuario Taller / Taller2026! y activa
-        SSH + TightVNC localhost automaticamente al terminar)
+    [1] Boot con plantilla Taller (crea usuario Taller / Taller2026! y ejecuta
+        TALLER_KIT\scripts\taller-setup.ps1 automaticamente al terminar)
+- Si guardas tu Auth Key de Tailscale en \TALLER_KIT\config\tailscale-auth.txt,
+  al terminar el formateo tambien queda conectada a Internet sola.
 - Si necesitas inyectar drivers NVMe / USB 3.0 en Windows 7 o Intel VMD en
   notebooks nuevas, revisa la seccion "Injection" en docs\GUIA-VENTOY-MULTI-ISO.md.
 ================================================================================

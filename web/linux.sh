@@ -21,8 +21,4 @@ if ! curl -fsSL "$BASE_URL/scripts/linux-conectar.sh" -o "$TMP_DIR/linux-conecta
 fi
 
 chmod +x "$TMP_DIR/linux-conectar.sh"
-if [[ $# -eq 0 ]]; then
-  exec "$TMP_DIR/linux-conectar.sh" --cliente
-else
-  exec "$TMP_DIR/linux-conectar.sh" "$@"
-fi
+exec "$TMP_DIR/linux-conectar.sh" "$@"

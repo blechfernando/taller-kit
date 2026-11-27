@@ -1,6 +1,5 @@
 param(
     [switch]$Detached,
-    [switch]$IncludePermanent,
     [switch]$Quiet
 )
 
@@ -22,25 +21,20 @@ if (-not (Test-IsAdmin)) {
 if ($Detached) {
     $tmpCopy = Join-Path $env:TEMP "taller-clean-worker.ps1"
     Copy-Item -Path $ScriptPath -Destination $tmpCopy -Force
-    $extra = if ($IncludePermanent) { " -IncludePermanent" } else { "" }
-    $cmd = "ping 127.0.0.1 -n 4 >nul & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$tmpCopy`"$extra -Quiet & del /f /q `"$tmpCopy`" >nul 2>&1"
+    $cmd = "ping 127.0.0.1 -n 4 >nul & powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$tmpCopy`" -Quiet & del /f /q `"$tmpCopy`" >nul 2>&1"
     Start-Process -FilePath "cmd.exe" -ArgumentList "/c $cmd" -WindowStyle Hidden
     Write-Host "LIMPIEZA_PROGRAMADA_OK"
     exit 0
 }
 
-function Uninstall-TightVncIfFlagged {
-    param([string]$DirPath)
-    $flag = Join-Path $DirPath "installed_tightvnc.flag"
-    if (-not (Test-Path $flag)) { return }
-    Write-Host "[TALLER] Desinstalando TightVNC temporal..." -ForegroundColor Cyan
-    Stop-Service -Name "tvnserver" -Force
+function Uninstall-MsiByDisplayName {
+    param([string]$DisplayNamePattern)
     $regRoots = @(
         "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
         "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
     )
-    $item = Get-ItemProperty $regRoots | Where-Object { $_.DisplayName -like "TightVNC*" } | Select-Object -First 1
-    if ($item) {
+    $items = Get-ItemProperty $regRoots | Where-Object { $_.DisplayName -like $DisplayNamePattern }
+    foreach ($item in $items) {
         $guid = $item.PSChildName
         if ($guid -match '^\{[0-9A-Fa-f-]+\}$') {
             Start-Process -FilePath "msiexec.exe" -ArgumentList "/x $guid /qn /norestart" -Wait
@@ -48,44 +42,89 @@ function Uninstall-TightVncIfFlagged {
     }
 }
 
-# --- Limpiar modo Cliente (C:\TallerTmp) ---
-Write-Host "[TALLER] Eliminando acceso temporal del taller..." -ForegroundColor Cyan
-
-$svc = Get-Service -Name "TallerSSH"
-if ($svc) {
-    if ($svc.Status -eq "Running") {
-        Stop-Service -Name "TallerSSH" -Force
-        Start-Sleep -Milliseconds 500
+function Remove-KeysFromFile {
+    param([string]$FilePath, [string[]]$KeysToRemove)
+    if (-not (Test-Path $FilePath) -or -not $KeysToRemove -or $KeysToRemove.Count -eq 0) { return }
+    $lines = [System.IO.File]::ReadAllText($FilePath) -split "`r?`n"
+    $kept = @()
+    foreach ($l in $lines) {
+        $t = $l.Trim()
+        if ($t -and -not ($KeysToRemove -contains $t)) {
+            $kept += $t
+        }
     }
-    & sc.exe delete "TallerSSH" | Out-Null
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    if ($kept.Count -gt 0) {
+        [System.IO.File]::WriteAllText($FilePath, (($kept -join "`n") + "`n"), $enc)
+    } else {
+        Remove-Item -Force $FilePath
+    }
 }
 
-& netsh.exe advfirewall firewall delete rule name="TallerSSH-Cliente" | Out-Null
+function Remove-TallerDir {
+    param([string]$DirPath)
+    if (-not (Test-Path $DirPath)) { return }
 
-$tmpDir = "C:\TallerTmp"
-if (Test-Path $tmpDir) {
-    Uninstall-TightVncIfFlagged -DirPath $tmpDir
+    # 1. Tailscale (si fue instalado por Taller Kit)
+    if (Test-Path (Join-Path $DirPath "installed_tailscale.flag")) {
+        Write-Host "[TALLER] Desconectando y desinstalando Tailscale..." -ForegroundColor Cyan
+        $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
+        if (Test-Path $tsExe) {
+            & $tsExe logout | Out-Null
+            Start-Sleep -Seconds 1
+        }
+        Stop-Service -Name "Tailscale" -Force
+        Uninstall-MsiByDisplayName -DisplayNamePattern "Tailscale*"
+    }
+
+    # 2. TightVNC (si fue instalado por Taller Kit)
+    if (Test-Path (Join-Path $DirPath "installed_tightvnc.flag")) {
+        Write-Host "[TALLER] Desinstalando TightVNC..." -ForegroundColor Cyan
+        Stop-Service -Name "tvnserver" -Force
+        Uninstall-MsiByDisplayName -DisplayNamePattern "TightVNC*"
+    }
+
+    # 3. Claves agregadas a OpenSSH nativo (si correspondia)
+    $nativeFlag = Join-Path $DirPath "added_native_keys.flag"
+    if (Test-Path $nativeFlag) {
+        $keysToRemove = @()
+        foreach ($l in ([System.IO.File]::ReadAllText($nativeFlag) -split "`r?`n")) {
+            $t = $l.Trim()
+            if ($t) { $keysToRemove += $t }
+        }
+        Remove-KeysFromFile -FilePath "C:\ProgramData\ssh\administrators_authorized_keys" -KeysToRemove $keysToRemove
+        Get-ChildItem "C:\Users" -Directory | ForEach-Object {
+            Remove-KeysFromFile -FilePath (Join-Path $_.FullName ".ssh\authorized_keys") -KeysToRemove $keysToRemove
+        }
+    }
+
+    # 4. Servicio SSH del Taller (o legacy sshd apuntando a Taller)
+    foreach ($svcName in @("TallerSSH", "sshd")) {
+        $wmiSvc = Get-WmiObject Win32_Service -Filter "Name='$svcName'"
+        if ($wmiSvc) {
+            $p = [string]$wmiSvc.PathName
+            if (($svcName -eq "TallerSSH") -or ($p -like "*\Taller\openssh\sshd.exe*") -or ($p -like "*\TallerTmp\openssh\sshd.exe*")) {
+                Stop-Service -Name $svcName -Force
+                Start-Sleep -Milliseconds 500
+                & sc.exe delete $svcName | Out-Null
+            }
+        }
+    }
+
     Start-Sleep -Milliseconds 400
-    Remove-Item -Recurse -Force $tmpDir
+    Remove-Item -Recurse -Force $DirPath
 }
 
-# --- Opcional: Limpiar instalacion Permanente de C:\ProgramData\Taller ---
-if ($IncludePermanent) {
-    $permDir = "C:\ProgramData\Taller"
-    $wmiSvc = Get-WmiObject Win32_Service -Filter "Name='sshd'"
-    if ($wmiSvc -and ([string]$wmiSvc.PathName -like "*\Taller\openssh\sshd.exe*")) {
-        Stop-Service -Name "sshd" -Force
-        Start-Sleep -Milliseconds 500
-        & sc.exe delete "sshd" | Out-Null
-    }
-    & netsh.exe advfirewall firewall delete rule name="TallerSSH-Permanente" | Out-Null
-    if (Test-Path $permDir) {
-        Uninstall-TightVncIfFlagged -DirPath $permDir
-        Remove-Item -Recurse -Force $permDir
-    }
+Write-Host "[TALLER] Limpiando por completo el acceso remoto del taller..." -ForegroundColor Cyan
+
+Remove-TallerDir -DirPath "C:\ProgramData\Taller"
+Remove-TallerDir -DirPath "C:\TallerTmp"
+
+foreach ($rule in @("TallerSSH", "TallerSSH-Cliente", "TallerSSH-Permanente")) {
+    & netsh.exe advfirewall firewall delete rule name="$rule" | Out-Null
 }
 
-Write-Host "[OK] PC limpia. No quedaron servicios temporales ni archivos en C:\TallerTmp." -ForegroundColor Green
+Write-Host "[OK] PC limpia. Se eliminaron TallerSSH, TightVNC, Tailscale (si los instalo el kit) y archivos." -ForegroundColor Green
 if (-not $Quiet) {
     Write-Host ""
     Read-Host "Presiona ENTER para cerrar" | Out-Null

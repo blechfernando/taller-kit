@@ -1,7 +1,7 @@
 param(
-    [string]$Mode = "Cliente",
-    [int]$Port = 0,
+    [int]$Port = 22,
     [switch]$NoVnc,
+    [switch]$NoTailscale,
     [string]$TailscaleKey = "",
     [string]$TailscaleName = "",
     [string]$TailscaleTags = "tag:remoto",
@@ -96,23 +96,26 @@ function New-RandomPassword8 {
 
 function Merge-AuthorizedKeys {
     param([string]$SourcePub, [string]$DestAuthKeys)
-    $lines = @()
+    $existingList = @()
     if (Test-Path $DestAuthKeys) {
         $existing = [System.IO.File]::ReadAllText($DestAuthKeys)
         foreach ($l in ($existing -split "`r?`n")) {
             $t = $l.Trim()
-            if ($t -and -not ($lines -contains $t)) { $lines += $t }
+            if ($t -and -not ($existingList -contains $t)) { $existingList += $t }
         }
     }
+    $addedKeys = @()
     $incoming = [System.IO.File]::ReadAllText($SourcePub)
     foreach ($l in ($incoming -split "`r?`n")) {
         $t = $l.Trim()
-        if ($t -and -not $t.StartsWith("#") -and -not ($lines -contains $t)) {
-            $lines += $t
+        if ($t -and -not $t.StartsWith("#") -and -not ($existingList -contains $t)) {
+            $existingList += $t
+            $addedKeys += $t
         }
     }
-    $joined = ($lines -join "`n") + "`n"
+    $joined = ($existingList -join "`n") + "`n"
     Write-Utf8NoBom -Path $DestAuthKeys -Content $joined
+    return $addedKeys
 }
 
 function Set-FirewallRuleCompat {
@@ -120,7 +123,6 @@ function Set-FirewallRuleCompat {
     & netsh.exe advfirewall firewall delete rule name="$RuleName" | Out-Null
     & netsh.exe advfirewall firewall add rule name="$RuleName" dir=in action=allow protocol=TCP localport=$ListenPort profile=any remoteip="localsubnet,100.64.0.0/10" | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        # Fallback por si remoteip multiple falla en algun Win7 antiguo
         & netsh.exe advfirewall firewall add rule name="$RuleName" dir=in action=allow protocol=TCP localport=$ListenPort profile=any | Out-Null
     }
 }
@@ -132,7 +134,7 @@ function Get-LanIpv4List {
         foreach ($c in $cfgs) {
             if ($c.IPAddress) {
                 foreach ($ip in $c.IPAddress) {
-                    if ($ip -match '^\d+\.\d+\.\d+\.\d+$' -and $ip -notlike '127.*' -and $ip -notlike '169.254.*') {
+                    if ($ip -match '^\d+\.\d+\.\d+\.\d+$' -and $ip -notlike '127.*' -and $ip -notlike '169.254.*' -and $ip -notlike '100.*') {
                         $ips += $ip
                     }
                 }
@@ -142,6 +144,17 @@ function Get-LanIpv4List {
     return $ips
 }
 
+function Read-FirstNonCommentLine {
+    param([string]$FilePath)
+    if (-not (Test-Path $FilePath)) { return "" }
+    $txt = [System.IO.File]::ReadAllText($FilePath)
+    foreach ($l in ($txt -split "`r?`n")) {
+        $t = $l.Trim()
+        if ($t -and -not $t.StartsWith("#")) { return $t }
+    }
+    return ""
+}
+
 # --- Validaciones iniciales ---
 if (-not (Test-IsAdmin)) {
     Write-Host "[ERROR] Este script debe ejecutarse como Administrador." -ForegroundColor Red
@@ -149,18 +162,15 @@ if (-not (Test-IsAdmin)) {
     exit 1
 }
 
-$modeNorm = $Mode.Trim().ToLower()
-if ($modeNorm -eq "cliente")         { $Mode = "Cliente" }
-elseif ($modeNorm -eq "permanente") { $Mode = "Permanente" }
-elseif ($modeNorm -eq "remoto")     { $Mode = "Remoto" }
-else { throw "Modo invalido: '$Mode'. Usa Cliente, Permanente o Remoto." }
-
-if ($Port -le 0) {
-    if ($Mode -eq "Cliente") { $Port = 2222 } else { $Port = 22 }
-}
-
 if (-not (Test-Path $ControllersPub)) {
     throw "No se encontro el archivo de claves publicas: $ControllersPub"
+}
+
+if (-not $TailscaleKey) {
+    $c1 = Join-Path $KitRoot "config\tailscale-auth.txt"
+    $c2 = Join-Path $KitRoot "tailscale-auth.txt"
+    $TailscaleKey = Read-FirstNonCommentLine -FilePath $c1
+    if (-not $TailscaleKey) { $TailscaleKey = Read-FirstNonCommentLine -FilePath $c2 }
 }
 
 # --- Detectar OS y arquitectura ---
@@ -192,18 +202,11 @@ if (-not $currentUser -or $currentUser -eq "$env:COMPUTERNAME`$") {
     try { $currentUser = (& whoami.exe).Split('\')[-1].Trim() } catch {}
 }
 
-Write-Info "Equipo: $env:COMPUTERNAME | Usuario: $currentUser | Sistema: $osShort ($arch) | Modo: $Mode (puerto $Port)"
+$TargetDir   = "C:\ProgramData\Taller"
+$ServiceName = "TallerSSH"
+$FwRuleName  = "TallerSSH"
 
-# --- Rutas destino ---
-if ($Mode -eq "Cliente") {
-    $TargetDir   = "C:\TallerTmp"
-    $ServiceName = "TallerSSH"
-    $FwRuleName  = "TallerSSH-Cliente"
-} else {
-    $TargetDir   = "C:\ProgramData\Taller"
-    $ServiceName = "sshd"
-    $FwRuleName  = "TallerSSH-Permanente"
-}
+Write-Info "Equipo: $env:COMPUTERNAME | Usuario: $currentUser | Sistema: $osShort ($arch) | Instalacion fija completa"
 
 if (-not (Test-Path $TargetDir)) {
     New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
@@ -256,30 +259,51 @@ if (-not $NoVnc) {
     }
 }
 
-# --- 2. OpenSSH Server ---
+# --- 2. OpenSSH Server fijo (puerto 22) ---
 $managedSshDir = Join-Path $TargetDir "openssh"
 $managedExe    = Join-Path $managedSshDir "sshd.exe"
-$existingSvc   = Get-WmiObject Win32_Service -Filter "Name='$ServiceName'" -ErrorAction SilentlyContinue
-$useBuiltinSshd = $false
+$nativeSshSvc  = Get-WmiObject Win32_Service -Filter "Name='sshd'" -ErrorAction SilentlyContinue
+$useNativeSshd = $false
+$activeSshName = $ServiceName
 
-if ($Mode -ne "Cliente" -and $existingSvc) {
-    $svcPath = [string]$existingSvc.PathName
+if ($nativeSshSvc -and ($Port -eq 22)) {
+    $svcPath = [string]$nativeSshSvc.PathName
     if ($svcPath -notlike "*\Taller\openssh\sshd.exe*") {
-        $useBuiltinSshd = $true
+        $useNativeSshd = $true
+        $activeSshName = "sshd"
     }
 }
 
-if ($useBuiltinSshd) {
+if ($useNativeSshd) {
     Write-Info "Se detecto OpenSSH nativo de Windows en puerto 22. Autorizando claves del taller..."
-    $userAuth = Join-Path $env:USERPROFILE ".ssh\authorized_keys"
-    Merge-AuthorizedKeys -SourcePub $ControllersPub -DestAuthKeys $userAuth
+    $userAuth  = Join-Path $env:USERPROFILE ".ssh\authorized_keys"
+    $addedUser = Merge-AuthorizedKeys -SourcePub $ControllersPub -DestAuthKeys $userAuth
 
     $progDataSsh = Join-Path $env:ProgramData "ssh"
     $adminAuth   = Join-Path $progDataSsh "administrators_authorized_keys"
-    Merge-AuthorizedKeys -SourcePub $ControllersPub -DestAuthKeys $adminAuth
+    $addedAdmin  = Merge-AuthorizedKeys -SourcePub $ControllersPub -DestAuthKeys $adminAuth
     Set-StrictAdminAcl -Path $adminAuth
 
-    $nativeCfg = Join-Path $progDataSsh "sshd_config"
+    $allAdded = @()
+    foreach ($k in ($addedUser + $addedAdmin)) {
+        if ($k -and -not ($allAdded -contains $k)) { $allAdded += $k }
+    }
+    if ($allAdded.Count -gt 0) {
+        $flagPath = Join-Path $TargetDir "added_native_keys.flag"
+        $prevAdded = @()
+        if (Test-Path $flagPath) {
+            foreach ($l in ([System.IO.File]::ReadAllText($flagPath) -split "`r?`n")) {
+                $t = $l.Trim()
+                if ($t -and -not ($prevAdded -contains $t)) { $prevAdded += $t }
+            }
+        }
+        foreach ($k in $allAdded) {
+            if (-not ($prevAdded -contains $k)) { $prevAdded += $k }
+        }
+        Write-Utf8NoBom -Path $flagPath -Content (($prevAdded -join "`n") + "`n")
+    }
+
+    $nativeCfg  = Join-Path $progDataSsh "sshd_config"
     $cfgChanged = $false
     if (Test-Path $nativeCfg) {
         $cfgText = [System.IO.File]::ReadAllText($nativeCfg)
@@ -339,15 +363,15 @@ if ($useBuiltinSshd) {
     Set-StrictAdminAcl -Path ($hostKeyPath + ".pub")
 
     $authKeysPath = Join-Path $TargetDir "authorized_keys"
-    Merge-AuthorizedKeys -SourcePub $ControllersPub -DestAuthKeys $authKeysPath
+    [void](Merge-AuthorizedKeys -SourcePub $ControllersPub -DestAuthKeys $authKeysPath)
     Set-StrictAdminAcl -Path $authKeysPath
 
     $metaRaw = "$env:COMPUTERNAME|$currentUser|$osShort|$vncFlag"
     $metaB64 = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($metaRaw))
 
-    $dirFwd     = $TargetDir.Replace("\", "/")
-    $sftpFwd    = (Join-Path $managedSshDir "sftp-server.exe").Replace("\", "/")
-    $sshdCfg    = Join-Path $TargetDir "sshd_config"
+    $dirFwd  = $TargetDir.Replace("\", "/")
+    $sftpFwd = (Join-Path $managedSshDir "sftp-server.exe").Replace("\", "/")
+    $sshdCfg = Join-Path $TargetDir "sshd_config"
     $cfgLines = @(
         "Port $Port",
         "ListenAddress 0.0.0.0",
@@ -373,63 +397,86 @@ if ($useBuiltinSshd) {
 
     $binPathArg = "`"$managedExe`" -f `"$sshdCfg`""
     if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-        & sc.exe config $ServiceName binPath= $binPathArg start= auto DisplayName= "Taller OpenSSH ($Mode)" | Out-Null
+        & sc.exe config $ServiceName binPath= $binPathArg start= auto DisplayName= "Taller OpenSSH" | Out-Null
     } else {
-        & sc.exe create $ServiceName binPath= $binPathArg start= auto DisplayName= "Taller OpenSSH ($Mode)" | Out-Null
+        & sc.exe create $ServiceName binPath= $binPathArg start= auto DisplayName= "Taller OpenSSH" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "No se pudo crear el servicio $ServiceName" }
     }
     & sc.exe failure $ServiceName reset= 60 actions= restart/5000/restart/5000/restart/5000 | Out-Null
+    Write-Utf8NoBom -Path (Join-Path $TargetDir "installed_ssh.flag") -Content "1"
 
     Set-FirewallRuleCompat -RuleName $FwRuleName -ListenPort $Port
 
     Start-Service -Name $ServiceName
-    Write-Ok "Servicio $ServiceName iniciado en puerto $Port."
+    Write-Ok "Servicio $ServiceName iniciado en puerto $Port (arranque automatico)."
 }
 
+# Copiar taller-clean.ps1 para limpieza remota o manual
 $cleanSrc = Join-Path $ScriptDir "taller-clean.ps1"
-if ((Test-Path $cleanSrc) -and ($Mode -eq "Cliente")) {
+if (Test-Path $cleanSrc) {
     Copy-Item -Path $cleanSrc -Destination (Join-Path $TargetDir "taller-clean.ps1") -Force -ErrorAction SilentlyContinue
 }
 
-# --- 3. Tailscale (solo Remoto o si se paso TailscaleKey) ---
-$tailscaleIp = ""
-if ($Mode -eq "Remoto" -or $TailscaleKey) {
+# --- 3. Tailscale (Internet fijo con tag:remoto) ---
+$tailscaleIp     = ""
+$tailscaleStatus = "No instalado"
+if (-not $NoTailscale) {
     if ($isWin7Legacy -or -not $is64) {
-        Write-Warn "Tailscale moderno requiere Windows 10/11 64-bit. En esta PC usa 5-PANTALLA-RAPIDA-RUSTDESK.bat."
+        $tailscaleStatus = "No compatible con Win7/32-bit (solo LAN en esta PC)"
+        Write-Warn "Tailscale moderno requiere Windows 10/11 64-bit. En Windows 7 queda listo SSH + VNC por LAN."
     } else {
         $tsExe = Join-Path $env:ProgramFiles "Tailscale\tailscale.exe"
         if (-not (Test-Path $tsExe)) {
             $tsMsi = Join-Path $BinDir "tailscale-amd64.msi"
-            if (-not (Test-Path $tsMsi)) {
-                throw "No se encontro $tsMsi para modo Remoto."
-            }
-            Write-Info "Instalando Tailscale silenciosamente..."
-            $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$tsMsi`" /qn /norestart" -Wait -PassThru
-            if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) {
-                throw "Fallo instalacion de Tailscale (codigo $($proc.ExitCode))."
-            }
-            $wait = 0
-            while ($wait -lt 40) {
-                $tsSvc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
-                if ($tsSvc -and $tsSvc.Status -eq "Running" -and (Test-Path $tsExe)) { break }
-                Start-Sleep -Milliseconds 500
-                $wait++
-            }
-        }
-        if ($TailscaleKey) {
-            Write-Info "Conectando Tailscale en modo desatendido..."
-            $tsArgs = @("up", "--authkey=$TailscaleKey", "--advertise-tags=$TailscaleTags", "--unattended")
-            if ($TailscaleName) { $tsArgs += "--hostname=$TailscaleName" }
-            & $tsExe @tsArgs
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warn "tailscale up devolvio codigo $LASTEXITCODE. Revisa la Auth Key o permisos."
+            if (Test-Path $tsMsi) {
+                Write-Info "Instalando Tailscale silenciosamente..."
+                $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i `"$tsMsi`" /qn /norestart" -Wait -PassThru
+                if ($proc.ExitCode -eq 0 -or $proc.ExitCode -eq 3010) {
+                    Write-Utf8NoBom -Path (Join-Path $TargetDir "installed_tailscale.flag") -Content "1"
+                    $wait = 0
+                    while ($wait -lt 40) {
+                        $tsSvc = Get-Service -Name "Tailscale" -ErrorAction SilentlyContinue
+                        if ($tsSvc -and $tsSvc.Status -eq "Running" -and (Test-Path $tsExe)) { break }
+                        if ($tsSvc -and $tsSvc.Status -ne "Running") { Start-Service -Name "Tailscale" -ErrorAction SilentlyContinue }
+                        Start-Sleep -Milliseconds 500
+                        $wait++
+                    }
+                    $tailscaleStatus = "Instalado (listo para activar)"
+                } else {
+                    Write-Warn "Tailscale MSI devolvio codigo $($proc.ExitCode)."
+                    $tailscaleStatus = "Error instalando ($($proc.ExitCode))"
+                }
             } else {
-                Start-Sleep -Seconds 2
-                try { $tailscaleIp = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim() } catch {}
-                if ($tailscaleIp) { Write-Ok "Tailscale conectado! IP Tailscale: $tailscaleIp" }
+                Write-Warn "No se encontro $tsMsi; se omite Tailscale."
             }
         } else {
-            Write-Warn "No se ingreso TailscaleKey; Tailscale instalado pero sin autenticar."
+            $tailscaleStatus = "Ya instalado"
+        }
+
+        if (Test-Path $tsExe) {
+            try { $tailscaleIp = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim() } catch {}
+            if ($tailscaleIp -match '^\d+\.\d+\.\d+\.\d+$') {
+                $tailscaleStatus = "Conectado ($tailscaleIp)"
+            } elseif ($TailscaleKey) {
+                Write-Info "Conectando Tailscale a tu red en modo desatendido..."
+                $tsArgs = @("up", "--authkey=$TailscaleKey", "--advertise-tags=$TailscaleTags", "--unattended")
+                if ($TailscaleName) { $tsArgs += "--hostname=$TailscaleName" }
+                & $tsExe @tsArgs
+                if ($LASTEXITCODE -eq 0) {
+                    Start-Sleep -Seconds 2
+                    try { $tailscaleIp = (& $tsExe ip -4 2>$null | Select-Object -First 1).Trim() } catch {}
+                    if ($tailscaleIp) {
+                        $tailscaleStatus = "Conectado ($tailscaleIp)"
+                        Write-Ok "Tailscale conectado! IP Tailscale: $tailscaleIp"
+                    }
+                } else {
+                    Write-Warn "tailscale up devolvio codigo $LASTEXITCODE. Revisa la Auth Key."
+                    $tailscaleStatus = "Error de Auth Key ($LASTEXITCODE)"
+                }
+            } else {
+                $tailscaleStatus = "Instalado (pendiente de activar desde controlador con 'taller tailscale')"
+                Write-Info "Tailscale quedo instalado. Podes activarlo remoto con: taller tailscale $env:COMPUTERNAME"
+            }
         }
     }
 }
@@ -437,32 +484,32 @@ if ($Mode -eq "Remoto" -or $TailscaleKey) {
 # --- 4. Resumen final ---
 $lanIps = Get-LanIpv4List
 $lanStr = if ($lanIps.Count -gt 0) { $lanIps -join ", " } else { "Sin IP LAN detectada" }
+$firstLan = if ($lanIps.Count -gt 0) { $lanIps[0] } else { $env:COMPUTERNAME }
+$aliasHint = if ($TailscaleName) { $TailscaleName.ToLower() } else { $env:COMPUTERNAME.ToLower() }
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green
-Write-Host "  LISTO! PC PREPARADA PARA CONTROL REMOTO DEL TALLER" -ForegroundColor Green
+Write-Host "  LISTO! PC CONECTADA (FIJA PARA TALLER / LOCAL / INTERNET)" -ForegroundColor Green
 Write-Host "============================================================" -ForegroundColor Green
 Write-Host "  Equipo       : $env:COMPUTERNAME ($osShort $arch)"
 Write-Host "  Usuario SSH  : $currentUser"
 Write-Host "  IP(s) LAN    : $lanStr"
-if ($tailscaleIp) {
-Write-Host "  IP Tailscale : $tailscaleIp" -ForegroundColor Cyan
-}
-Write-Host "  Puerto SSH   : $Port  (Servicio: $ServiceName)"
+Write-Host "  Internet TS  : $tailscaleStatus"
+Write-Host "  Puerto SSH   : $Port  (Servicio: $activeSshName)"
 Write-Host "  Pantalla VNC : $vncStatus"
 Write-Host "------------------------------------------------------------"
-if ($Mode -eq "Cliente") {
-Write-Host "  Desde tu PC principal o Lech decile al agente:"
-Write-Host "    'Ya conecte la PC nueva ($env:COMPUTERNAME), entrale'"
-Write-Host "  O ejecuta:   taller scan   /   taller ssh $env:COMPUTERNAME"
-} elseif ($tailscaleIp) {
-Write-Host "  Desde tu PC principal ejecuta:"
-Write-Host "    taller add-host $($TailscaleName.ToLower()) $tailscaleIp $currentUser $Port"
+Write-Host "  Desde tu PC principal o Lech:"
+Write-Host "    taller scan"
+if ($tailscaleIp) {
+Write-Host "    taller add-host $aliasHint $firstLan $currentUser $Port   (o IP $tailscaleIp)"
 Write-Host "    taller ssh $tailscaleIp"
 } else {
-Write-Host "  Desde tu PC principal o Lech ejecuta:"
-Write-Host "    taller scan   /   taller ssh $($lanIps | Select-Object -First 1)"
+Write-Host "    taller ssh $env:COMPUTERNAME"
+if ((-not $isWin7Legacy) -and $is64 -and (-not $NoTailscale)) {
+Write-Host "    taller tailscale $env:COMPUTERNAME $aliasHint   (activa Internet remoto)"
 }
+}
+Write-Host "  Al entregar al cliente o vender la PC, ejecuta 2-LIMPIAR.bat o 'taller clean'."
 Write-Host "============================================================" -ForegroundColor Green
 
 if (-not $Quiet) {
